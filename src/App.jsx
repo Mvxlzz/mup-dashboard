@@ -187,7 +187,7 @@ export default function App() {
 
         {/* Sensitivity toggle */}
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-slate-600">Sensitivity</span>
+          <span className="text-sm text-slate-600">Sensitivity Analysis</span>
           <button
             onClick={() => setShowSensitivity((v) => !v)}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
