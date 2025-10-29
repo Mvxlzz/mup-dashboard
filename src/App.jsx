@@ -9,14 +9,16 @@ import {
   Legend,
   ReferenceLine,
   ResponsiveContainer,
+  BarChart,
+  Bar,
 } from "recharts";
 
 export default function App() {
   // === Editable inputs ===
   const [E_manu_mup, setEManuMup] = useState(0.0008);
   const [KM_ONE_WAY, setKmOneWay] = useState(300);
-  const [p_ret, setPRet] = useState(0.95);  // slider (0..1)
-  const [p_scr, setPScr] = useState(0.02);  // slider (0..1)
+  const [p_ret, setPRet] = useState(0.95); // slider (0..1)
+  const [p_scr, setPScr] = useState(0.02); // slider (0..1)
   const [E_EoL_mup, setEEoL] = useState(-0.0015);
   const [N_max_top, setNMaxTop] = useState(50);
 
@@ -92,8 +94,118 @@ export default function App() {
       chartData,
       g_single_shot: E_single_shot * 1000,
       g_cycle: E_cycle * 1000,
+      // expose helpers for sensitivity
+      helper: {
+        T_FACTOR_PER_KM,
+        E_fw_init,
+        E_clean,
+        E_use,
+        E_single_shot,
+        m_Al_mup,
+        EF_Al_prim,
+      },
     };
   }, [E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, constants]);
+
+  // === Sensitivity (±10%) for KPI: MUP CO2 at N_max (g per cup) ===
+  const sensitivity = useMemo(() => {
+    // Helper to compute amortized g CO2/cup at a given N using current state + overrides
+    function kpiAtNMax(overrides = {}) {
+      const m_Al_mup = calc.helper.m_Al_mup;
+      const EF_Al_prim = calc.helper.EF_Al_prim;
+      const E_fw_init = calc.helper.E_fw_init;
+      const E_clean = calc.helper.E_clean;
+      const E_use = calc.helper.E_use;
+      const T_FACTOR_PER_KM = calc.helper.T_FACTOR_PER_KM;
+
+      const E_manu = overrides.E_manu_mup ?? E_manu_mup;
+      const km = overrides.KM_ONE_WAY ?? KM_ONE_WAY;
+      const pret = Math.min(1, Math.max(0, overrides.p_ret ?? p_ret));
+      const pscr = Math.min(1, Math.max(0, overrides.p_scr ?? p_scr));
+      const eEoL = overrides.E_EoL_mup ?? E_EoL_mup;
+      const N = overrides.N_max_top ?? N_max_top;
+
+      const E_fw = T_FACTOR_PER_KM * km;
+      const E_rev = T_FACTOR_PER_KM * km;
+
+      const E_mat_mup = m_Al_mup * EF_Al_prim;
+      const E_start = E_mat_mup + E_manu + E_fw_init;
+      const E_cycle = E_clean + E_fw + E_use + E_rev;
+
+      const q = pret * (1 - pscr);
+      const U = q === 1 ? N : (1 - q ** N) / (1 - q);
+      const E_total_lifetime = E_start + U * E_cycle + eEoL;
+      const amort = E_total_lifetime / U; // kg CO2e/cup
+      return amort * 1000; // g CO2e/cup
+    }
+
+    const base = kpiAtNMax();
+
+    // define parameters to perturb
+    const params = [
+      {
+        key: "E_manu_mup",
+        name: "Manufacturing MUP",
+        value: E_manu_mup,
+        isProb: false,
+        min: 0,
+      },
+      {
+        key: "KM_ONE_WAY",
+        name: "One-way Distance",
+        value: KM_ONE_WAY,
+        isProb: false,
+        min: 0,
+      },
+      {
+        key: "p_ret",
+        name: "Return Rate p_ret",
+        value: p_ret,
+        isProb: true,
+      },
+      {
+        key: "p_scr",
+        name: "Scrap Rate p_scr",
+        value: p_scr,
+        isProb: true,
+      },
+      {
+        key: "E_EoL_mup",
+        name: "Net EoL Balance",
+        value: E_EoL_mup,
+        isProb: false, // can be negative; keep 10% around it
+      },
+    ];
+
+    // build data with -10% and +10% (bounded 0..1 for probabilities, >=min for others)
+    const rows = params.map((p) => {
+      const lowRaw = p.value * 0.9;
+      const highRaw = p.value * 1.1;
+
+      const low =
+        p.isProb ? Math.max(0, Math.min(1, lowRaw)) : Math.max(p.min ?? -Infinity, lowRaw);
+      const high =
+        p.isProb ? Math.max(0, Math.min(1, highRaw)) : Math.max(p.min ?? -Infinity, highRaw);
+
+      const lowKpi = kpiAtNMax({ [p.key]: low });
+      const highKpi = kpiAtNMax({ [p.key]: high });
+
+      // For tornado: left bar = (low - base), right bar = (high - base)
+      return {
+        name: p.name,
+        Decrease: lowKpi - base, // often negative (left)
+        Increase: highKpi - base, // often positive (right)
+        ImpactAbs: Math.max(Math.abs(lowKpi - base), Math.abs(highKpi - base)),
+        lowValue: low,
+        highValue: high,
+      };
+    });
+
+    // sort by absolute impact descending
+    rows.sort((a, b) => b.ImpactAbs - a.ImpactAbs);
+
+    return { base, rows };
+  }, [E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, calc.helper]);
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6">
@@ -311,6 +423,7 @@ export default function App() {
             </div>
           </div>
 
+          {/* Main line chart */}
           <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
             <h2 className="font-semibold text-slate-900 mb-4 text-lg">
               CO₂ per Cup over Reuse Cycles (g)
@@ -341,7 +454,6 @@ export default function App() {
                   />
                   <Tooltip />
                   <Legend />
-
                   <Line
                     type="monotone"
                     dataKey="MUP"
@@ -368,7 +480,6 @@ export default function App() {
                     dot={false}
                     name="MUP minimum"
                   />
-
                   {calc.breakEven && (
                     <ReferenceLine
                       x={calc.breakEven}
@@ -388,9 +499,60 @@ export default function App() {
               </ResponsiveContainer>
             </div>
           </div>
+
+          {/* Sensitivity tornado */}
+          <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
+            <h2 className="font-semibold text-slate-900 mb-2 text-lg">
+              Sensitivity (±10%) — Impact on MUP at N_max (g CO₂e / cup)
+            </h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Bars show change vs. base ({sensitivity.base.toFixed(2)} g). Left = −10%, Right = +10%.
+            </p>
+
+            <div className="w-full h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={sensitivity.rows}
+                  layout="vertical"
+                  margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
+                  <XAxis
+                    type="number"
+                    tickFormatter={(v) => `${v.toFixed(1)} g`}
+                    stroke="#475569"
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={170}
+                    stroke="#475569"
+                  />
+                  <Tooltip
+                    formatter={(value) => [`${Number(value).toFixed(2)} g`, "Δ vs. base"]}
+                  />
+                  <Legend />
+                  <ReferenceLine x={0} stroke="#64748b" />
+                  {/* Left (negative) bar for -10% */}
+                  <Bar
+                    dataKey="Decrease"
+                    name="-10%"
+                    fill="#ef4444"
+                    isAnimationActive={false}
+                  />
+                  {/* Right (positive) bar for +10% */}
+                  <Bar
+                    dataKey="Increase"
+                    name="+10%"
+                    fill="#10b981"
+                    isAnimationActive={false}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
         </section>
       </div>
-
       <footer className="text-[11px] text-slate-500 text-center leading-relaxed">
         Model based on Python LCA calculation. All values per cup.
         <br />
