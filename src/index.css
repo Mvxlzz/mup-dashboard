@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* optional: Schriftglättung & Grundstil */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Inter", "Roboto", Arial, sans-serif;
+  line-height: 1.5;
+  margin: 0;
+}
