@@ -22,6 +22,9 @@ export default function App() {
   const [E_EoL_mup, setEEoL] = useState(-0.0015);
   const [N_max_top, setNMaxTop] = useState(50);
 
+  // Toggle for sensitivity (default OFF)
+  const [showSensitivity, setShowSensitivity] = useState(false);
+
   // === Fixed constants ===
   const constants = {
     m_Al_mup: 0.00324,
@@ -94,7 +97,6 @@ export default function App() {
       chartData,
       g_single_shot: E_single_shot * 1000,
       g_cycle: E_cycle * 1000,
-      // expose helpers for sensitivity
       helper: {
         T_FACTOR_PER_KM,
         E_fw_init,
@@ -107,9 +109,10 @@ export default function App() {
     };
   }, [E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, constants]);
 
-  // === Sensitivity (±10%) for KPI: MUP CO2 at N_max (g per cup) ===
+  // === Sensitivity (±10%) — computed only when enabled ===
   const sensitivity = useMemo(() => {
-    // Helper to compute amortized g CO2/cup at a given N using current state + overrides
+    if (!showSensitivity) return null;
+
     function kpiAtNMax(overrides = {}) {
       const m_Al_mup = calc.helper.m_Al_mup;
       const EF_Al_prim = calc.helper.EF_Al_prim;
@@ -135,77 +138,44 @@ export default function App() {
       const q = pret * (1 - pscr);
       const U = q === 1 ? N : (1 - q ** N) / (1 - q);
       const E_total_lifetime = E_start + U * E_cycle + eEoL;
-      const amort = E_total_lifetime / U; // kg CO2e/cup
+      const amort = E_total_lifetime / U;
       return amort * 1000; // g CO2e/cup
     }
 
     const base = kpiAtNMax();
 
-    // define parameters to perturb
     const params = [
-      {
-        key: "E_manu_mup",
-        name: "Manufacturing MUP",
-        value: E_manu_mup,
-        isProb: false,
-        min: 0,
-      },
-      {
-        key: "KM_ONE_WAY",
-        name: "One-way Distance",
-        value: KM_ONE_WAY,
-        isProb: false,
-        min: 0,
-      },
-      {
-        key: "p_ret",
-        name: "Return Rate p_ret",
-        value: p_ret,
-        isProb: true,
-      },
-      {
-        key: "p_scr",
-        name: "Scrap Rate p_scr",
-        value: p_scr,
-        isProb: true,
-      },
-      {
-        key: "E_EoL_mup",
-        name: "Net EoL Balance",
-        value: E_EoL_mup,
-        isProb: false, // can be negative; keep 10% around it
-      },
+      { key: "E_manu_mup", name: "Manufacturing MUP", value: E_manu_mup, isProb: false, min: 0 },
+      { key: "KM_ONE_WAY", name: "One-way Distance", value: KM_ONE_WAY, isProb: false, min: 0 },
+      { key: "p_ret", name: "Return Rate p_ret", value: p_ret, isProb: true },
+      { key: "p_scr", name: "Scrap Rate p_scr", value: p_scr, isProb: true },
+      { key: "E_EoL_mup", name: "Net EoL Balance", value: E_EoL_mup, isProb: false },
     ];
 
-    // build data with -10% and +10% (bounded 0..1 for probabilities, >=min for others)
     const rows = params.map((p) => {
       const lowRaw = p.value * 0.9;
       const highRaw = p.value * 1.1;
 
-      const low =
-        p.isProb ? Math.max(0, Math.min(1, lowRaw)) : Math.max(p.min ?? -Infinity, lowRaw);
-      const high =
-        p.isProb ? Math.max(0, Math.min(1, highRaw)) : Math.max(p.min ?? -Infinity, highRaw);
+      const low = p.isProb ? Math.max(0, Math.min(1, lowRaw)) : Math.max(p.min ?? -Infinity, lowRaw);
+      const high = p.isProb ? Math.max(0, Math.min(1, highRaw)) : Math.max(p.min ?? -Infinity, highRaw);
 
       const lowKpi = kpiAtNMax({ [p.key]: low });
       const highKpi = kpiAtNMax({ [p.key]: high });
 
-      // For tornado: left bar = (low - base), right bar = (high - base)
       return {
         name: p.name,
-        Decrease: lowKpi - base, // often negative (left)
-        Increase: highKpi - base, // often positive (right)
+        Decrease: lowKpi - base,
+        Increase: highKpi - base,
         ImpactAbs: Math.max(Math.abs(lowKpi - base), Math.abs(highKpi - base)),
         lowValue: low,
         highValue: high,
       };
     });
 
-    // sort by absolute impact descending
     rows.sort((a, b) => b.ImpactAbs - a.ImpactAbs);
 
     return { base, rows };
-  }, [E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, calc.helper]);
+  }, [showSensitivity, E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, calc.helper]);
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6">
@@ -215,8 +185,27 @@ export default function App() {
           CO₂ per Cup: Single-Use (SUP) vs. Multi-Use (MUP)
         </h1>
 
+        {/* Sensitivity toggle */}
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-sm text-slate-600">Sensitivity</span>
+          <button
+            onClick={() => setShowSensitivity((v) => !v)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+              showSensitivity ? "bg-emerald-500" : "bg-slate-300"
+            }`}
+            aria-pressed={showSensitivity}
+            aria-label="Toggle sensitivity analysis"
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+                showSensitivity ? "translate-x-5" : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
+
         {calc.breakEven && (
-          <span className="ml-auto bg-emerald-500/10 border border-emerald-500 text-emerald-700 text-sm font-semibold px-3 py-1 rounded-full shadow-sm animate-pulse">
+          <span className="bg-emerald-500/10 border border-emerald-500 text-emerald-700 text-sm font-semibold px-3 py-1 rounded-full shadow-sm animate-pulse">
             Break-Even at Cycle N={calc.breakEven}
           </span>
         )}
@@ -454,45 +443,16 @@ export default function App() {
                   />
                   <Tooltip />
                   <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="MUP"
-                    stroke="#0ea5e9"
-                    strokeWidth={2}
-                    dot={false}
-                    name="MUP amortized"
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="SUP"
-                    stroke="#ef4444"
-                    strokeDasharray="5 5"
-                    strokeWidth={2}
-                    dot={false}
-                    name="SUP reference"
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="MinCycle"
-                    stroke="#6b7280"
-                    strokeDasharray="2 2"
-                    strokeWidth={2}
-                    dot={false}
-                    name="MUP minimum"
-                  />
+                  <Line type="monotone" dataKey="MUP" stroke="#0ea5e9" strokeWidth={2} dot={false} name="MUP amortized" />
+                  <Line type="monotone" dataKey="SUP" stroke="#ef4444" strokeDasharray="5 5" strokeWidth={2} dot={false} name="SUP reference" />
+                  <Line type="monotone" dataKey="MinCycle" stroke="#6b7280" strokeDasharray="2 2" strokeWidth={2} dot={false} name="MUP minimum" />
                   {calc.breakEven && (
                     <ReferenceLine
                       x={calc.breakEven}
                       stroke="#10b981"
                       strokeWidth={3}
                       strokeDasharray="3 3"
-                      label={{
-                        value: `Break-even N=${calc.breakEven}`,
-                        position: "top",
-                        fill: "#065f46",
-                        fontSize: 12,
-                        fontWeight: 600,
-                      }}
+                      label={{ value: `Break-even N=${calc.breakEven}`, position: "top", fill: "#065f46", fontSize: 12, fontWeight: 600 }}
                     />
                   )}
                 </LineChart>
@@ -500,59 +460,39 @@ export default function App() {
             </div>
           </div>
 
-          {/* Sensitivity tornado */}
-          <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
-            <h2 className="font-semibold text-slate-900 mb-2 text-lg">
-              Sensitivity (±10%) — Impact on MUP at N_max (g CO₂e / cup)
-            </h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Bars show change vs. base ({sensitivity.base.toFixed(2)} g). Left = −10%, Right = +10%.
-            </p>
+          {/* Sensitivity tornado (shown only when enabled) */}
+          {showSensitivity && sensitivity && (
+            <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
+              <h2 className="font-semibold text-slate-900 mb-2 text-lg">
+                Sensitivity (±10%) — Impact on MUP at N_max (g CO₂e / cup)
+              </h2>
+              <p className="text-xs text-slate-500 mb-3">
+                Bars show change vs. base ({sensitivity.base.toFixed(2)} g). Left = −10%, Right = +10%.
+              </p>
 
-            <div className="w-full h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={sensitivity.rows}
-                  layout="vertical"
-                  margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
-                  <XAxis
-                    type="number"
-                    tickFormatter={(v) => `${v.toFixed(1)} g`}
-                    stroke="#475569"
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={170}
-                    stroke="#475569"
-                  />
-                  <Tooltip
-                    formatter={(value) => [`${Number(value).toFixed(2)} g`, "Δ vs. base"]}
-                  />
-                  <Legend />
-                  <ReferenceLine x={0} stroke="#64748b" />
-                  {/* Left (negative) bar for -10% */}
-                  <Bar
-                    dataKey="Decrease"
-                    name="-10%"
-                    fill="#ef4444"
-                    isAnimationActive={false}
-                  />
-                  {/* Right (positive) bar for +10% */}
-                  <Bar
-                    dataKey="Increase"
-                    name="+10%"
-                    fill="#10b981"
-                    isAnimationActive={false}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="w-full h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={sensitivity.rows}
+                    layout="vertical"
+                    margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
+                    <XAxis type="number" tickFormatter={(v) => `${v.toFixed(1)} g`} stroke="#475569" />
+                    <YAxis type="category" dataKey="name" width={170} stroke="#475569" />
+                    <Tooltip formatter={(value) => [`${Number(value).toFixed(2)} g`, "Δ vs. base"]} />
+                    <Legend />
+                    <ReferenceLine x={0} stroke="#64748b" />
+                    <Bar dataKey="Decrease" name="-10%" fill="#ef4444" isAnimationActive={false} />
+                    <Bar dataKey="Increase" name="+10%" fill="#10b981" isAnimationActive={false} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </div>
+          )}
         </section>
       </div>
+
       <footer className="text-[11px] text-slate-500 text-center leading-relaxed">
         Model based on Python LCA calculation. All values per cup.
         <br />
