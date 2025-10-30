@@ -9,9 +9,11 @@ import {
   Legend,
   ReferenceLine,
   ResponsiveContainer,
+  BarChart,
+  Bar,
 } from "recharts";
 
-/* ========= Helpers at module scope (avoid remounts) ========= */
+/* ========= Helpers at module scope (avoid remounts & focus loss) ========= */
 function toNum(v, fallback = 0) {
   const n = typeof v === "string" ? parseFloat(v) : v;
   return Number.isFinite(n) ? n : fallback;
@@ -28,7 +30,7 @@ function computeSeries(params, constants, N_max_top) {
     T_FACTOR_PER_100KM,
   } = constants;
 
-  // Safe coerce
+  // Safe coerce (allow string states)
   const E_manu_mup = toNum(params.E_manu_mup, 0);
   const KM_ONE_WAY = toNum(params.KM_ONE_WAY, 0);
   const p_ret = Math.min(1, Math.max(0, toNum(params.p_ret, 0)));
@@ -84,18 +86,18 @@ function computeSeries(params, constants, N_max_top) {
   };
 }
 
-/* Reusable inputs (module scope) */
+/* ===== Reusable UI (module scope) ===== */
 function Num({ label, value, set, placeholder }) {
   return (
     <div className="flex flex-col">
       <label className="font-medium text-slate-700">{label}</label>
       <input
-        type="text"             // text to allow intermediate states
+        type="text"
         inputMode="decimal"
         placeholder={placeholder}
         className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
         value={value}
-        onChange={(e) => set(e.target.value)} // keep raw string
+        onChange={(e) => set(e.target.value)}
         onBlur={(e) => {
           const normalized = e.target.value.replace(",", ".").trim();
           set(normalized);
@@ -193,7 +195,7 @@ function ScenarioCard({ title, color, state, setState, result, N_max_top }) {
 
       <div className="grid grid-cols-3 gap-3 text-sm mt-4">
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-slate-500 text-xs uppercase font-medium">q = p_ret × (1 − p_scr)</div>
+          <div className="text-slate-500 text-xs uppercase font-medium">Survival Rate</div>
           <div className="text-xl font-semibold text-slate-900">
             {(toNum(state.p_ret, 0) * (1 - toNum(state.p_scr, 0))).toLocaleString(undefined, {
               style: "percent",
@@ -223,7 +225,10 @@ export default function App() {
   // Shared horizon
   const [N_max_top, setNMaxTop] = useState(50);
 
-  // Constants (stable object so it doesn't change identity)
+  // Toggle sensitivity (default OFF)
+  const [showSensitivity, setShowSensitivity] = useState(false);
+
+  // Constants (stable)
   const constants = useMemo(
     () => ({
       m_Al_mup: 0.00324,
@@ -237,7 +242,7 @@ export default function App() {
     []
   );
 
-  // Three scenarios — numeric sliders; string inputs for text fields
+  // Three scenarios (string fields for text inputs, numbers for sliders)
   const [worst, setWorst] = useState({
     name: "Worst Case",
     E_manu_mup: "0.0010",
@@ -268,7 +273,7 @@ export default function App() {
     color: "#10b981",
   });
 
-  // Results
+  // Results per scenario
   const resWorst = useMemo(
     () => computeSeries(worst, constants, N_max_top),
     [worst, constants, N_max_top]
@@ -298,16 +303,87 @@ export default function App() {
     return Array.from(map.values()).sort((a, b) => a.cycle - b.cycle);
   }, [resWorst.data, resExpected.data, resBest.data]);
 
+  /* ===== Sensitivity (±10%) on Expected Case, computed only when shown) ===== */
+  const sensitivity = useMemo(() => {
+    if (!showSensitivity) return null;
+
+    // KPI at N_max for Expected case (g CO2e/cup)
+    const kpiAtNMax = (overrides = {}) => {
+      const pars = {
+        E_manu_mup: toNum(overrides.E_manu_mup ?? expected.E_manu_mup, 0),
+        KM_ONE_WAY: toNum(overrides.KM_ONE_WAY ?? expected.KM_ONE_WAY, 0),
+        p_ret: Math.min(1, Math.max(0, toNum(overrides.p_ret ?? expected.p_ret, 0))),
+        p_scr: Math.min(1, Math.max(0, toNum(overrides.p_scr ?? expected.p_scr, 0))),
+        E_EoL_mup: toNum(overrides.E_EoL_mup ?? expected.E_EoL_mup, 0),
+      };
+
+      // Reuse computeSeries logic for a single point (N_max_top)
+      const temp = computeSeries(pars, constants, N_max_top);
+      // last point is at N_max_top, so we can read lastCost_g
+      return temp.lastCost_g; // g/cup
+    };
+
+    const base = kpiAtNMax();
+
+    const params = [
+      { key: "E_manu_mup", name: "Manufacturing MUP", value: toNum(expected.E_manu_mup, 0), isProb: false, min: 0 },
+      { key: "KM_ONE_WAY", name: "One-way Distance", value: toNum(expected.KM_ONE_WAY, 0), isProb: false, min: 0 },
+      { key: "p_ret", name: "Return Rate p_ret", value: toNum(expected.p_ret, 0), isProb: true },
+      { key: "p_scr", name: "Scrap Rate p_scr", value: toNum(expected.p_scr, 0), isProb: true },
+      { key: "E_EoL_mup", name: "Net EoL Balance", value: toNum(expected.E_EoL_mup, 0), isProb: false },
+    ];
+
+    const rows = params.map((p) => {
+      const lowRaw = p.value * 0.9;
+      const highRaw = p.value * 1.1;
+
+      const low = p.isProb ? Math.max(0, Math.min(1, lowRaw)) : Math.max(p.min ?? -Infinity, lowRaw);
+      const high = p.isProb ? Math.max(0, Math.min(1, highRaw)) : Math.max(p.min ?? -Infinity, highRaw);
+
+      const lowKpi = kpiAtNMax({ [p.key]: low });
+      const highKpi = kpiAtNMax({ [p.key]: high });
+
+      return {
+        name: p.name,
+        Decrease: lowKpi - base, // left
+        Increase: highKpi - base, // right
+        ImpactAbs: Math.max(Math.abs(lowKpi - base), Math.abs(highKpi - base)),
+      };
+    });
+
+    rows.sort((a, b) => b.ImpactAbs - a.ImpactAbs);
+
+    return { base, rows };
+  }, [showSensitivity, expected, constants, N_max_top]);
+
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6">
-      {/* Header */}
+      {/* Header with toggle */}
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-bold text-slate-900">
           CO₂ per Cup: Single-Use (SUP) vs. Multi-Use (MUP) — 3 Scenarios
         </h1>
 
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-sm text-slate-600">Sensitivity Analysis</span>
+          <button
+            onClick={() => setShowSensitivity((v) => !v)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+              showSensitivity ? "bg-emerald-500" : "bg-slate-300"
+            }`}
+            aria-pressed={showSensitivity}
+            aria-label="Toggle sensitivity analysis"
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+                showSensitivity ? "translate-x-5" : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
+
         {(resExpected.breakEven || resWorst.breakEven || resBest.breakEven) && (
-          <span className="ml-auto bg-emerald-500/10 border border-emerald-500 text-emerald-700 text-sm font-semibold px-3 py-1 rounded-full shadow-sm">
+          <span className="bg-emerald-500/10 border border-emerald-500 text-emerald-700 text-sm font-semibold px-3 py-1 rounded-full shadow-sm">
             Break-even (if any) shown in chart
           </span>
         )}
@@ -341,7 +417,7 @@ export default function App() {
         />
       </div>
 
-      {/* Chart */}
+      {/* Line chart */}
       <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-slate-900 text-lg">CO₂ per Cup over Reuse Cycles (g)</h2>
@@ -423,6 +499,46 @@ export default function App() {
           SUP reference 0.00437 kg CO₂e/cup · cleaning+refill 0.001 kg CO₂e/cycle.
         </p>
       </div>
+
+      {/* Sensitivity tornado (shown only when enabled) */}
+      {showSensitivity && sensitivity && (
+        <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
+          <h2 className="font-semibold text-slate-900 mb-2 text-lg">
+            Sensitivity (±10%) — Impact on MUP (Expected) at N_max (g CO₂e / cup)
+          </h2>
+          <p className="text-xs text-slate-500 mb-3">
+            Bars show change vs. base ({sensitivity.base.toFixed(2)} g). Left = −10%, Right = +10%.
+          </p>
+
+          <div className="w-full h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={sensitivity.rows}
+                layout="vertical"
+                margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
+                <XAxis
+                  type="number"
+                  tickFormatter={(v) => `${v.toFixed(1)} g`}
+                  stroke="#475569"
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={170}
+                  stroke="#475569"
+                />
+                <Tooltip formatter={(value) => [`${Number(value).toFixed(2)} g`, "Δ vs. base"]} />
+                <Legend />
+                <ReferenceLine x={0} stroke="#64748b" />
+                <Bar dataKey="Decrease" name="-10%" fill="#ef4444" isAnimationActive={false} />
+                <Bar dataKey="Increase" name="+10%" fill="#10b981" isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       <footer className="text-[11px] text-slate-500 text-center leading-relaxed">
         Model based on Python LCA calculation. All values per cup.
