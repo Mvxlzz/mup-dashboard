@@ -11,7 +11,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-// Hilfsfunktion: sichere Zahl aus String/Number ziehen
+/* ========= Helpers at module scope (avoid remounts) ========= */
 function toNum(v, fallback = 0) {
   const n = typeof v === "string" ? parseFloat(v) : v;
   return Number.isFinite(n) ? n : fallback;
@@ -28,7 +28,7 @@ function computeSeries(params, constants, N_max_top) {
     T_FACTOR_PER_100KM,
   } = constants;
 
-  // Werte sicher numerisch machen (Strings erlaubt im State)
+  // Safe coerce
   const E_manu_mup = toNum(params.E_manu_mup, 0);
   const KM_ONE_WAY = toNum(params.KM_ONE_WAY, 0);
   const p_ret = Math.min(1, Math.max(0, toNum(params.p_ret, 0)));
@@ -84,105 +84,30 @@ function computeSeries(params, constants, N_max_top) {
   };
 }
 
-export default function App() {
-  // Gemeinsamer Horizont
-  const [N_max_top, setNMaxTop] = useState(50);
-
-  // Konstanten
-  const constants = {
-    m_Al_mup: 0.00324,
-    EF_Al_prim: 14.77,
-    E_fw_init: 0.00037,
-    E_single_shot: 0.00437,
-    E_use: 0.0,
-    E_clean: 0.001,
-    T_FACTOR_PER_100KM: 0.00037,
-  };
-
-  // Drei Szenarien — Werte jetzt als STRING für Inputs (wo sinnvoll), Slider bleiben Zahlen
-  const [worst, setWorst] = useState({
-    name: "Worst Case",
-    E_manu_mup: "0.0010",
-    KM_ONE_WAY: "500",
-    p_ret: 0.85,   // Slider numeric
-    p_scr: 0.06,   // Slider numeric
-    E_EoL_mup: "0.0002",
-    color: "#ef4444",
-  });
-
-  const [expected, setExpected] = useState({
-    name: "Expected Case",
-    E_manu_mup: "0.0008",
-    KM_ONE_WAY: "300",
-    p_ret: 0.95,
-    p_scr: 0.02,
-    E_EoL_mup: "0.0000",
-    color: "#0ea5e9",
-  });
-
-  const [best, setBest] = useState({
-    name: "Best Case",
-    E_manu_mup: "0.0006",
-    KM_ONE_WAY: "150",
-    p_ret: 0.98,
-    p_scr: 0.01,
-    E_EoL_mup: "-0.0015",
-    color: "#10b981",
-  });
-
-  // Ergebnisse
-  const resWorst = useMemo(
-    () => computeSeries(worst, constants, N_max_top),
-    [worst, constants, N_max_top]
-  );
-  const resExpected = useMemo(
-    () => computeSeries(expected, constants, N_max_top),
-    [expected, constants, N_max_top]
-  );
-  const resBest = useMemo(
-    () => computeSeries(best, constants, N_max_top),
-    [best, constants, N_max_top]
-  );
-
-  // Chart-Daten zusammenführen
-  const chartData = useMemo(() => {
-    const map = new Map();
-    const add = (arr, key) => {
-      arr.forEach((r) => {
-        const row = map.get(r.cycle) || { cycle: r.cycle, SUP: r.SUP_g };
-        row[key] = r.MUP_g;
-        map.set(r.cycle, row);
-      });
-    };
-    add(resWorst.data, "MUP_Worst");
-    add(resExpected.data, "MUP_Expected");
-    add(resBest.data, "MUP_Best");
-    return Array.from(map.values()).sort((a, b) => a.cycle - b.cycle);
-  }, [resWorst.data, resExpected.data, resBest.data]);
-
-  // Reusable Input-Komponenten
-  const Num = ({ label, value, set, step = "0.0001", min, max, placeholder }) => (
+/* Reusable inputs (module scope) */
+function Num({ label, value, set, placeholder }) {
+  return (
     <div className="flex flex-col">
       <label className="font-medium text-slate-700">{label}</label>
       <input
-        type="text"               // <-- Text statt number: erlaubt Zwischenzustände
-        inputMode="decimal"       // mobile keyboard
+        type="text"             // text to allow intermediate states
+        inputMode="decimal"
         placeholder={placeholder}
         className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
         value={value}
-        onChange={(e) => set(e.target.value)} // rohen String speichern
+        onChange={(e) => set(e.target.value)} // keep raw string
         onBlur={(e) => {
-          // bei Verlassen optional normalisieren (Trim, Komma -> Punkt)
           const normalized = e.target.value.replace(",", ".").trim();
           set(normalized);
         }}
       />
-      {/* Kleiner Hilfe-Text */}
       <div className="text-[11px] text-slate-400 mt-1">Press Enter or leave the field to apply.</div>
     </div>
   );
+}
 
-  const Slider = ({ label, value, set, min = 0, max = 1, step = 0.01, percent = false }) => (
+function Slider({ label, value, set, min = 0, max = 1, step = 0.01, percent = false }) {
+  return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between">
         <label className="font-medium text-slate-700">{label}</label>
@@ -201,8 +126,10 @@ export default function App() {
       />
     </div>
   );
+}
 
-  const BEBadge = ({ label, be, color }) => (
+function BEBadge({ be, color }) {
+  return (
     <div
       className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold border`}
       style={{
@@ -219,14 +146,16 @@ export default function App() {
       {be ? `Break-even N=${be}` : "No break-even"}
     </div>
   );
+}
 
-  const ScenarioCard = ({ title, color, state, setState, result }) => (
+function ScenarioCard({ title, color, state, setState, result, N_max_top }) {
+  return (
     <section className="bg-white rounded-2xl shadow p-4 border border-slate-200">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-semibold text-slate-900 text-lg" style={{ color }}>
           {title}
         </h3>
-        <BEBadge label="Break-even" be={result?.breakEven} color={color} />
+        <BEBadge be={result?.breakEven} color={color} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 text-sm">
@@ -287,6 +216,87 @@ export default function App() {
       </div>
     </section>
   );
+}
+
+/* ====================== App ====================== */
+export default function App() {
+  // Shared horizon
+  const [N_max_top, setNMaxTop] = useState(50);
+
+  // Constants (stable object so it doesn't change identity)
+  const constants = useMemo(
+    () => ({
+      m_Al_mup: 0.00324,
+      EF_Al_prim: 14.77,
+      E_fw_init: 0.00037,
+      E_single_shot: 0.00437,
+      E_use: 0.0,
+      E_clean: 0.001,
+      T_FACTOR_PER_100KM: 0.00037,
+    }),
+    []
+  );
+
+  // Three scenarios — numeric sliders; string inputs for text fields
+  const [worst, setWorst] = useState({
+    name: "Worst Case",
+    E_manu_mup: "0.0010",
+    KM_ONE_WAY: "500",
+    p_ret: 0.85,
+    p_scr: 0.06,
+    E_EoL_mup: "0.0002",
+    color: "#ef4444",
+  });
+
+  const [expected, setExpected] = useState({
+    name: "Expected Case",
+    E_manu_mup: "0.0008",
+    KM_ONE_WAY: "300",
+    p_ret: 0.95,
+    p_scr: 0.02,
+    E_EoL_mup: "0.0000",
+    color: "#0ea5e9",
+  });
+
+  const [best, setBest] = useState({
+    name: "Best Case",
+    E_manu_mup: "0.0006",
+    KM_ONE_WAY: "150",
+    p_ret: 0.98,
+    p_scr: 0.01,
+    E_EoL_mup: "-0.0015",
+    color: "#10b981",
+  });
+
+  // Results
+  const resWorst = useMemo(
+    () => computeSeries(worst, constants, N_max_top),
+    [worst, constants, N_max_top]
+  );
+  const resExpected = useMemo(
+    () => computeSeries(expected, constants, N_max_top),
+    [expected, constants, N_max_top]
+  );
+  const resBest = useMemo(
+    () => computeSeries(best, constants, N_max_top),
+    [best, constants, N_max_top]
+  );
+
+  // Chart data merge
+  const chartData = useMemo(() => {
+    const map = new Map();
+    const add = (arr, key) => {
+      arr.forEach((r) => {
+        const row = map.get(r.cycle) || { cycle: r.cycle, SUP: r.SUP_g };
+        row[key] = r.MUP_g;
+        map.set(r.cycle, row);
+      });
+    };
+    add(resWorst.data, "MUP_Worst");
+    add(resExpected.data, "MUP_Expected");
+    add(resBest.data, "MUP_Best");
+    return Array.from(map.values()).sort((a, b) => a.cycle - b.cycle);
+  }, [resWorst.data, resExpected.data, resBest.data]);
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6">
@@ -303,7 +313,7 @@ export default function App() {
         )}
       </header>
 
-      {/* Inputs: drei Szenario-Karten + gemeinsamer Horizont */}
+      {/* Scenario cards */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <ScenarioCard
           title={worst.name}
@@ -311,6 +321,7 @@ export default function App() {
           state={worst}
           setState={setWorst}
           result={resWorst}
+          N_max_top={N_max_top}
         />
         <ScenarioCard
           title={expected.name}
@@ -318,6 +329,7 @@ export default function App() {
           state={expected}
           setState={setExpected}
           result={resExpected}
+          N_max_top={N_max_top}
         />
         <ScenarioCard
           title={best.name}
@@ -325,9 +337,11 @@ export default function App() {
           state={best}
           setState={setBest}
           result={resBest}
+          N_max_top={N_max_top}
         />
       </div>
 
+      {/* Chart */}
       <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-slate-900 text-lg">CO₂ per Cup over Reuse Cycles (g)</h2>
@@ -370,15 +384,12 @@ export default function App() {
               <Tooltip />
               <Legend />
 
-              {/* Drei MUP-Linien */}
               <Line type="monotone" dataKey="MUP_Worst" stroke={worst.color} strokeWidth={2} dot={false} name={worst.name} />
               <Line type="monotone" dataKey="MUP_Expected" stroke={expected.color} strokeWidth={3} dot={false} name={expected.name} />
               <Line type="monotone" dataKey="MUP_Best" stroke={best.color} strokeWidth={2} dot={false} name={best.name} />
 
-              {/* SUP-Referenz */}
               <Line type="monotone" dataKey="SUP" stroke="#6b7280" strokeDasharray="5 5" strokeWidth={2} dot={false} name="SUP reference" />
 
-              {/* Break-even Referenzlinien je Szenario */}
               {resWorst.breakEven && (
                 <ReferenceLine
                   x={resWorst.breakEven}
