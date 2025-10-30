@@ -241,19 +241,19 @@ export default function App() {
   const [worst, setWorst] = useState({
     name: "Worst Case",
     E_manu_mup: "0.0010",
-    KM_ONE_WAY: "500",
-    p_ret: 0.85,
-    p_scr: 0.06,
-    E_EoL_mup: "0.0002",
+    KM_ONE_WAY: "300",
+    p_ret: 0.95,
+    p_scr: 0.05,
+    E_EoL_mup: "0.0001",
     color: "#ef4444",
   });
 
   const [expected, setExpected] = useState({
     name: "Expected Case",
     E_manu_mup: "0.0008",
-    KM_ONE_WAY: "300",
-    p_ret: 0.95,
-    p_scr: 0.02,
+    KM_ONE_WAY: "150",
+    p_ret: 0.98,
+    p_scr: 0.01,
     E_EoL_mup: "0.0000",
     color: "#0ea5e9",
   });
@@ -261,10 +261,10 @@ export default function App() {
   const [best, setBest] = useState({
     name: "Best Case",
     E_manu_mup: "0.0006",
-    KM_ONE_WAY: "150",
-    p_ret: 0.98,
-    p_scr: 0.01,
-    E_EoL_mup: "-0.0015",
+    KM_ONE_WAY: "100",
+    p_ret: 1.0,
+    p_scr: 0,
+    E_EoL_mup: "-0.0001",
     color: "#10b981",
   });
 
