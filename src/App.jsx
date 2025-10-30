@@ -9,21 +9,73 @@ import {
   Legend,
   ReferenceLine,
   ResponsiveContainer,
-  BarChart,
-  Bar,
 } from "recharts";
 
-export default function App() {
-  // === Editable inputs ===
-  const [E_manu_mup, setEManuMup] = useState(0.0008);
-  const [KM_ONE_WAY, setKmOneWay] = useState(300);
-  const [p_ret, setPRet] = useState(0.95); // slider (0..1)
-  const [p_scr, setPScr] = useState(0.02); // slider (0..1)
-  const [E_EoL_mup, setEEoL] = useState(0);
-  const [N_max_top, setNMaxTop] = useState(50);
+function computeSeries(params, constants, N_max_top) {
+  const {
+    m_Al_mup,
+    EF_Al_prim,
+    E_fw_init,
+    E_single_shot,
+    E_use,
+    E_clean,
+    T_FACTOR_PER_100KM,
+  } = constants;
 
-  // Toggle for sensitivity (default OFF)
-  const [showSensitivity, setShowSensitivity] = useState(false);
+  const { E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup } = params;
+
+  const T_FACTOR_PER_KM = T_FACTOR_PER_100KM / 100.0;
+  const E_fw = T_FACTOR_PER_KM * KM_ONE_WAY;
+  const E_rev = T_FACTOR_PER_KM * KM_ONE_WAY;
+
+  const E_mat_mup = m_Al_mup * EF_Al_prim;
+  const E_start = E_mat_mup + E_manu_mup + E_fw_init;
+  const E_cycle = E_clean + E_fw + E_use + E_rev;
+
+  const q = Math.min(1, Math.max(0, p_ret)) * (1 - Math.min(1, Math.max(0, p_scr)));
+
+  function U_eff_js(N, q) {
+    if (q === 1) return N;
+    return (1 - q ** N) / (1 - q);
+  }
+
+  const data = [];
+  let firstCost = null;
+  let lastCost = null;
+  let breakEven = null;
+
+  for (let N = 1; N <= N_max_top; N++) {
+    const U = U_eff_js(N, q);
+    const E_total_lifetime = E_start + U * E_cycle + E_EoL_mup;
+    const amort = E_total_lifetime / U; // kg
+
+    if (firstCost === null) firstCost = amort;
+    lastCost = amort;
+
+    data.push({
+      cycle: N,
+      MUP_g: amort * 1000, // g
+      SUP_g: E_single_shot * 1000,
+    });
+
+    if (breakEven === null && amort <= E_single_shot) {
+      breakEven = N;
+    }
+  }
+
+  return {
+    data,
+    q,
+    E_cycle_g: E_cycle * 1000,
+    firstCost_g: firstCost * 1000,
+    lastCost_g: lastCost * 1000,
+    breakEven,
+  };
+}
+
+export default function App() {
+  // === Shared horizon ===
+  const [N_max_top, setNMaxTop] = useState(50);
 
   // === Fixed constants ===
   const constants = {
@@ -36,461 +88,364 @@ export default function App() {
     T_FACTOR_PER_100KM: 0.00037,
   };
 
-  // === Core calculations ===
-  const calc = useMemo(() => {
-    const {
-      m_Al_mup,
-      EF_Al_prim,
-      E_fw_init,
-      E_single_shot,
-      E_use,
-      E_clean,
-      T_FACTOR_PER_100KM,
-    } = constants;
+  // === Three scenarios (each with its own inputs) ===
+  // You can tweak the defaults below to reflect your worst/expected/best assumptions.
+  const [worst, setWorst] = useState({
+    name: "Worst Case",
+    E_manu_mup: 0.0010,
+    KM_ONE_WAY: 300,
+    p_ret: 0.95,
+    p_scr: 0.02,
+    E_EoL_mup: 0.0001,
+    color: "#ef4444",
+  });
 
-    const T_FACTOR_PER_KM = T_FACTOR_PER_100KM / 100.0;
-    const E_fw = T_FACTOR_PER_KM * KM_ONE_WAY;
-    const E_rev = T_FACTOR_PER_KM * KM_ONE_WAY;
+  const [expected, setExpected] = useState({
+    name: "Expected Case",
+    E_manu_mup: 0.0008,
+    KM_ONE_WAY: 200,
+    p_ret: 0.97,
+    p_scr: 0.01,
+    E_EoL_mup: 0.0,
+    color: "#0ea5e9",
+  });
 
-    const E_mat_mup = m_Al_mup * EF_Al_prim;
-    const E_start = E_mat_mup + E_manu_mup + E_fw_init;
-    const E_cycle = E_clean + E_fw + E_use + E_rev;
+  const [best, setBest] = useState({
+    name: "Best Case",
+    E_manu_mup: 0.0006,
+    KM_ONE_WAY: 100,
+    p_ret: 1.0,
+    p_scr: 0.00,
+    E_EoL_mup: -0.0001,
+    color: "#10b981",
+  });
 
-    const q = p_ret * (1 - p_scr);
+  // Helper to compute and memoize scenario results
+  const resWorst = useMemo(
+    () =>
+      computeSeries(
+        {
+          E_manu_mup: worst.E_manu_mup,
+          KM_ONE_WAY: worst.KM_ONE_WAY,
+          p_ret: worst.p_ret,
+          p_scr: worst.p_scr,
+          E_EoL_mup: worst.E_EoL_mup,
+        },
+        constants,
+        N_max_top
+      ),
+    [worst, constants, N_max_top]
+  );
 
-    function U_eff_js(N, q) {
-      if (q === 1) return N;
-      return (1 - q ** N) / (1 - q);
-    }
+  const resExpected = useMemo(
+    () =>
+      computeSeries(
+        {
+          E_manu_mup: expected.E_manu_mup,
+          KM_ONE_WAY: expected.KM_ONE_WAY,
+          p_ret: expected.p_ret,
+          p_scr: expected.p_scr,
+          E_EoL_mup: expected.E_EoL_mup,
+        },
+        constants,
+        N_max_top
+      ),
+    [expected, constants, N_max_top]
+  );
 
-    const chartData = [];
-    let breakEven = null;
-    let firstCost = null;
-    let lastCost = null;
+  const resBest = useMemo(
+    () =>
+      computeSeries(
+        {
+          E_manu_mup: best.E_manu_mup,
+          KM_ONE_WAY: best.KM_ONE_WAY,
+          p_ret: best.p_ret,
+          p_scr: best.p_scr,
+          E_EoL_mup: best.E_EoL_mup,
+        },
+        constants,
+        N_max_top
+      ),
+    [best, constants, N_max_top]
+  );
 
-    for (let N = 1; N <= N_max_top; N++) {
-      const U = U_eff_js(N, q);
-      const E_total_lifetime = E_start + U * E_cycle + E_EoL_mup;
-      const amort = E_total_lifetime / U;
-
-      if (firstCost === null) firstCost = amort;
-      lastCost = amort;
-
-      chartData.push({
-        cycle: N,
-        MUP: amort * 1000,
-        SUP: E_single_shot * 1000,
-        MinCycle: E_cycle * 1000,
+  // Merge data by cycle index for chart (use Expected as the base length)
+  const chartData = useMemo(() => {
+    const map = new Map();
+    const add = (arr, key) => {
+      arr.forEach((r) => {
+        const row = map.get(r.cycle) || { cycle: r.cycle, SUP: r.SUP_g };
+        row[key] = r.MUP_g;
+        map.set(r.cycle, row);
       });
-
-      if (breakEven === null && amort <= E_single_shot) {
-        breakEven = N;
-      }
-    }
-
-    return {
-      q,
-      E_cycle,
-      firstCost,
-      lastCost,
-      breakEven,
-      chartData,
-      g_single_shot: E_single_shot * 1000,
-      g_cycle: E_cycle * 1000,
-      helper: {
-        T_FACTOR_PER_KM,
-        E_fw_init,
-        E_clean,
-        E_use,
-        E_single_shot,
-        m_Al_mup,
-        EF_Al_prim,
-      },
     };
-  }, [E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, constants]);
+    add(resWorst.data, "MUP_Worst");
+    add(resExpected.data, "MUP_Expected");
+    add(resBest.data, "MUP_Best");
+    return Array.from(map.values()).sort((a, b) => a.cycle - b.cycle);
+  }, [resWorst.data, resExpected.data, resBest.data]);
 
-  // === Sensitivity (±10%) — computed only when enabled ===
-  const sensitivity = useMemo(() => {
-    if (!showSensitivity) return null;
+  // Small input helper
+  const Num = ({ label, value, set, step = "0.0001", min, max }) => (
+    <div className="flex flex-col">
+      <label className="font-medium text-slate-700">{label}</label>
+      <input
+        type="number"
+        step={step}
+        min={min}
+        max={max}
+        className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
+        value={value}
+        onChange={(e) => set(parseFloat(e.target.value))}
+      />
+    </div>
+  );
 
-    function kpiAtNMax(overrides = {}) {
-      const m_Al_mup = calc.helper.m_Al_mup;
-      const EF_Al_prim = calc.helper.EF_Al_prim;
-      const E_fw_init = calc.helper.E_fw_init;
-      const E_clean = calc.helper.E_clean;
-      const E_use = calc.helper.E_use;
-      const T_FACTOR_PER_KM = calc.helper.T_FACTOR_PER_KM;
+  const Slider = ({ label, value, set, min = 0, max = 1, step = 0.01, percent = false }) => (
+    <div className="flex flex-col">
+      <div className="flex items-center justify-between">
+        <label className="font-medium text-slate-700">{label}</label>
+        <span className="text-xs font-semibold text-slate-700 bg-slate-100 rounded px-2 py-0.5">
+          {percent ? `${(value * 100).toFixed(0)}%` : value}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => set(parseFloat(e.target.value))}
+        className="mt-2 w-full accent-emerald-600"
+      />
+    </div>
+  );
 
-      const E_manu = overrides.E_manu_mup ?? E_manu_mup;
-      const km = overrides.KM_ONE_WAY ?? KM_ONE_WAY;
-      const pret = Math.min(1, Math.max(0, overrides.p_ret ?? p_ret));
-      const pscr = Math.min(1, Math.max(0, overrides.p_scr ?? p_scr));
-      const eEoL = overrides.E_EoL_mup ?? E_EoL_mup;
-      const N = overrides.N_max_top ?? N_max_top;
+  const ScenarioCard = ({ title, color, state, setState, result }) => (
+    <section className="bg-white rounded-2xl shadow p-4 border border-slate-200">
+      <h3 className="font-semibold text-slate-900 mb-4 text-lg" style={{ color }}>
+        {title}
+      </h3>
 
-      const E_fw = T_FACTOR_PER_KM * km;
-      const E_rev = T_FACTOR_PER_KM * km;
+      <div className="grid grid-cols-1 gap-4 text-sm">
+        <Num
+          label="Manufacturing MUP [kg CO₂e/capsule]"
+          value={state.E_manu_mup}
+          set={(v) => setState((s) => ({ ...s, E_manu_mup: isNaN(v) ? 0 : v }))}
+          step="0.0001"
+          min="0"
+        />
+        <Num
+          label="One-way Transport Distance [km]"
+          value={state.KM_ONE_WAY}
+          set={(v) => setState((s) => ({ ...s, KM_ONE_WAY: isNaN(v) ? 0 : v }))}
+          step="1"
+          min="0"
+        />
+        <Slider
+          label="Return Rate p_ret (0–1)"
+          value={state.p_ret}
+          set={(v) => setState((s) => ({ ...s, p_ret: v }))}
+          percent
+        />
+        <Slider
+          label="Scrap Rate p_scr (0–1)"
+          value={state.p_scr}
+          set={(v) => setState((s) => ({ ...s, p_scr: v }))}
+          percent
+        />
+        <Num
+          label="Net EoL Balance [kg CO₂e/capsule]"
+          value={state.E_EoL_mup}
+          set={(v) => setState((s) => ({ ...s, E_EoL_mup: isNaN(v) ? 0 : v }))}
+          step="0.0001"
+        />
+      </div>
 
-      const E_mat_mup = m_Al_mup * EF_Al_prim;
-      const E_start = E_mat_mup + E_manu + E_fw_init;
-      const E_cycle = E_clean + E_fw + E_use + E_rev;
+      <div className="grid grid-cols-3 gap-3 text-sm mt-4">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-slate-500 text-xs uppercase font-medium">q = p_ret × (1 − p_scr)</div>
+          <div className="text-xl font-semibold text-slate-900">
+            {(result ? (state.p_ret * (1 - state.p_scr)) : 0).toLocaleString(undefined, {
+              style: "percent",
+              maximumFractionDigits: 1,
+            })}
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-slate-500 text-xs uppercase font-medium">Start (N=1)</div>
+          <div className="text-xl font-semibold text-slate-900">
+            {result ? result.firstCost_g.toFixed(2) : "-"} g
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-slate-500 text-xs uppercase font-medium">At N = {N_max_top}</div>
+          <div className="text-xl font-semibold text-slate-900">
+            {result ? result.lastCost_g.toFixed(2) : "-"} g
+          </div>
+        </div>
+      </div>
 
-      const q = pret * (1 - pscr);
-      const U = q === 1 ? N : (1 - q ** N) / (1 - q);
-      const E_total_lifetime = E_start + U * E_cycle + eEoL;
-      const amort = E_total_lifetime / U;
-      return amort * 1000; // g CO2e/cup
-    }
-
-    const base = kpiAtNMax();
-
-    const params = [
-      { key: "E_manu_mup", name: "Manufacturing MUP", value: E_manu_mup, isProb: false, min: 0 },
-      { key: "KM_ONE_WAY", name: "One-way Distance", value: KM_ONE_WAY, isProb: false, min: 0 },
-      { key: "p_ret", name: "Return Rate p_ret", value: p_ret, isProb: true },
-      { key: "p_scr", name: "Scrap Rate p_scr", value: p_scr, isProb: true },
-      { key: "E_EoL_mup", name: "Net EoL Balance", value: E_EoL_mup, isProb: false },
-    ];
-
-    const rows = params.map((p) => {
-      const lowRaw = p.value * 0.9;
-      const highRaw = p.value * 1.1;
-
-      const low = p.isProb ? Math.max(0, Math.min(1, lowRaw)) : Math.max(p.min ?? -Infinity, lowRaw);
-      const high = p.isProb ? Math.max(0, Math.min(1, highRaw)) : Math.max(p.min ?? -Infinity, highRaw);
-
-      const lowKpi = kpiAtNMax({ [p.key]: low });
-      const highKpi = kpiAtNMax({ [p.key]: high });
-
-      return {
-        name: p.name,
-        Decrease: lowKpi - base,
-        Increase: highKpi - base,
-        ImpactAbs: Math.max(Math.abs(lowKpi - base), Math.abs(highKpi - base)),
-        lowValue: low,
-        highValue: high,
-      };
-    });
-
-    rows.sort((a, b) => b.ImpactAbs - a.ImpactAbs);
-
-    return { base, rows };
-  }, [showSensitivity, E_manu_mup, KM_ONE_WAY, p_ret, p_scr, E_EoL_mup, N_max_top, calc.helper]);
+      <div className="text-xs text-slate-500 mt-2">
+        {result?.breakEven
+          ? `Break-even at N = ${result.breakEven}`
+          : "No break-even within horizon."}
+      </div>
+    </section>
+  );
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-6">
       {/* Header */}
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-bold text-slate-900">
-          CO₂ per Cup: Single-Use (SUP) vs. Multi-Use (MUP)
+          CO₂ per Cup: Single-Use (SUP) vs. Multi-Use (MUP) — 3 Scenarios
         </h1>
 
-        {/* Sensitivity toggle */}
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-slate-600">Sensitivity Analysis</span>
-          <button
-            onClick={() => setShowSensitivity((v) => !v)}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
-              showSensitivity ? "bg-emerald-500" : "bg-slate-300"
-            }`}
-            aria-pressed={showSensitivity}
-            aria-label="Toggle sensitivity analysis"
-          >
-            <span
-              className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
-                showSensitivity ? "translate-x-5" : "translate-x-1"
-              }`}
-            />
-          </button>
-        </div>
-
-        {calc.breakEven && (
-          <span className="bg-emerald-500/10 border border-emerald-500 text-emerald-700 text-sm font-semibold px-3 py-1 rounded-full shadow-sm animate-pulse">
-            Break-Even at Cycle N={calc.breakEven}
+        {(resExpected.breakEven || resWorst.breakEven || resBest.breakEven) && (
+          <span className="ml-auto bg-emerald-500/10 border border-emerald-500 text-emerald-700 text-sm font-semibold px-3 py-1 rounded-full shadow-sm">
+            Break-even (if any) shown in chart
           </span>
         )}
       </header>
 
+      {/* Inputs: three scenario cards + shared horizon */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Input Panel */}
-        <section className="lg:col-span-1 bg-white rounded-2xl shadow p-4 border border-slate-200">
-          <h2 className="font-semibold text-slate-900 mb-4 text-lg">Model Inputs</h2>
+        <ScenarioCard
+          title={worst.name}
+          color={worst.color}
+          state={worst}
+          setState={setWorst}
+          result={resWorst}
+        />
+        <ScenarioCard
+          title={expected.name}
+          color={expected.color}
+          state={expected}
+          setState={setExpected}
+          result={resExpected}
+        />
+        <ScenarioCard
+          title={best.name}
+          color={best.color}
+          state={best}
+          setState={setBest}
+          result={resBest}
+        />
+      </div>
 
-          <div className="space-y-5 text-sm">
-            {/* Manufacturing */}
-            <div className="flex flex-col">
-              <label className="font-medium text-slate-700">
-                Manufacturing MUP [kg CO₂e / capsule]
-              </label>
-              <input
-                type="number"
-                step="0.0001"
-                min="0"
-                className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
-                value={E_manu_mup}
-                onChange={(e) => setEManuMup(parseFloat(e.target.value))}
-              />
-            </div>
-
-            {/* Distance */}
-            <div className="flex flex-col">
-              <label className="font-medium text-slate-700">
-                One-way Transport Distance [km]
-              </label>
-              <input
-                type="number"
-                step="1"
-                min="0"
-                className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
-                value={KM_ONE_WAY}
-                onChange={(e) => setKmOneWay(parseFloat(e.target.value))}
-              />
-            </div>
-
-            {/* Return Rate slider */}
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between">
-                <label className="font-medium text-slate-700">
-                  Return Rate p_ret (0–1)
-                </label>
-                <span className="text-xs font-semibold text-slate-700 bg-slate-100 rounded px-2 py-0.5">
-                  {(p_ret * 100).toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={p_ret}
-                onChange={(e) => setPRet(parseFloat(e.target.value))}
-                className="mt-2 w-full accent-emerald-600"
-              />
-            </div>
-
-            {/* Scrap Rate slider */}
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between">
-                <label className="font-medium text-slate-700">
-                  Scrap Rate p_scr (0–1)
-                </label>
-                <span className="text-xs font-semibold text-slate-700 bg-slate-100 rounded px-2 py-0.5">
-                  {(p_scr * 100).toFixed(0)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={p_scr}
-                onChange={(e) => setPScr(parseFloat(e.target.value))}
-                className="mt-2 w-full accent-rose-600"
-              />
-            </div>
-
-            {/* EoL */}
-            <div className="flex flex-col">
-              <label className="font-medium text-slate-700">
-                Net EoL Balance MUP [kg CO₂e / capsule]
-              </label>
-              <input
-                type="number"
-                step="0.0001"
-                className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
-                value={E_EoL_mup}
-                onChange={(e) => setEEoL(parseFloat(e.target.value))}
-              />
-              <p className="text-xs text-slate-500">May be negative (recycling credit).</p>
-            </div>
-
-            {/* Horizon */}
-            <div className="flex flex-col">
-              <label className="font-medium text-slate-700">
-                Maximum Technical Cycles N_max
-              </label>
-              <input
-                type="number"
-                step="1"
-                min="1"
-                className="mt-1 rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900"
-                value={N_max_top}
-                onChange={(e) => setNMaxTop(parseInt(e.target.value))}
-              />
-            </div>
+      <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-slate-900 text-lg">CO₂ per Cup over Reuse Cycles (g)</h2>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-700">Maximum Technical Cycles N_max</label>
+            <input
+              type="number"
+              step="1"
+              min="1"
+              className="rounded-lg border border-slate-300 bg-slate-50 p-2 text-slate-900 w-24"
+              value={N_max_top}
+              onChange={(e) => setNMaxTop(parseInt(e.target.value || "1", 10))}
+            />
           </div>
+        </div>
 
-          <p className="text-[11px] text-slate-500 mt-6 leading-relaxed">
-            Fixed constants:
-            <br />• Capsule mass 0.00324 kg
-            <br />• Primary Al EF 14.77 kg CO₂e/kg
-            <br />• Initial logistics 0.00037 kg CO₂e/capsule
-            <br />• SUP reference 0.00437 kg CO₂e/cup
-            <br />• Cleaning + refill 0.001 kg CO₂e/cycle
-          </p>
-        </section>
+        <div className="w-full h-96">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
+              <XAxis
+                dataKey="cycle"
+                label={{
+                  value: "Max technical cycles (N_max)",
+                  position: "insideBottomRight",
+                  offset: -5,
+                  style: { fill: "#475569", fontSize: 12 },
+                }}
+                stroke="#475569"
+              />
+              <YAxis
+                label={{
+                  value: "g CO₂e / cup",
+                  angle: -90,
+                  position: "insideLeft",
+                  style: { fill: "#475569", fontSize: 12 },
+                }}
+                stroke="#475569"
+              />
+              <Tooltip />
+              <Legend />
 
-        {/* KPIs & Chart */}
-        <section className="lg:col-span-2 flex flex-col gap-6">
-          <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
-            <h2 className="font-semibold text-slate-900 mb-4 text-lg">Results (Live)</h2>
+              {/* Three scenario lines */}
+              <Line
+                type="monotone"
+                dataKey="MUP_Worst"
+                stroke={worst.color}
+                strokeWidth={2}
+                dot={false}
+                name={worst.name}
+              />
+              <Line
+                type="monotone"
+                dataKey="MUP_Expected"
+                stroke={expected.color}
+                strokeWidth={3}
+                dot={false}
+                name={expected.name}
+              />
+              <Line
+                type="monotone"
+                dataKey="MUP_Best"
+                stroke={best.color}
+                strokeWidth={2}
+                dot={false}
+                name={best.name}
+              />
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-slate-500 text-xs uppercase font-medium">
-                  Survival Rate q
-                </div>
-                <div className="text-xl font-semibold text-slate-900">
-                  {(calc.q * 100).toFixed(1)}%
-                </div>
-                <div className="text-slate-500 text-xs">q = p_ret × (1 − p_scr)</div>
-              </div>
+              {/* SUP reference */}
+              <Line
+                type="monotone"
+                dataKey="SUP"
+                stroke="#6b7280"
+                strokeDasharray="5 5"
+                strokeWidth={2}
+                dot={false}
+                name="SUP reference"
+              />
 
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-slate-500 text-xs uppercase font-medium">
-                  Start Cost (N = 1)
-                </div>
-                <div className="text-xl font-semibold text-slate-900">
-                  {(calc.firstCost * 1000).toFixed(2)} g CO₂e / cup
-                </div>
-                <div className="text-slate-500 text-xs">
-                  Includes Al + manufacturing + initial logistics
-                </div>
-              </div>
+              {/* Break-even reference lines (only if exist) */}
+              {resWorst.breakEven && (
+                <ReferenceLine
+                  x={resWorst.breakEven}
+                  stroke={worst.color}
+                  strokeDasharray="3 3"
+                  label={{ value: `${worst.name} N=${resWorst.breakEven}`, fill: worst.color, position: "top", fontSize: 11 }}
+                />
+              )}
+              {resExpected.breakEven && (
+                <ReferenceLine
+                  x={resExpected.breakEven}
+                  stroke={expected.color}
+                  strokeDasharray="3 3"
+                  label={{ value: `${expected.name} N=${resExpected.breakEven}`, fill: expected.color, position: "top", fontSize: 11 }}
+                />
+              )}
+              {resBest.breakEven && (
+                <ReferenceLine
+                  x={resBest.breakEven}
+                  stroke={best.color}
+                  strokeDasharray="3 3"
+                  label={{ value: `${best.name} N=${resBest.breakEven}`, fill: best.color, position: "top", fontSize: 11 }}
+                />
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
 
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-slate-500 text-xs uppercase font-medium">
-                  Cost at N = {N_max_top}
-                </div>
-                <div className="text-xl font-semibold text-slate-900">
-                  {(calc.lastCost * 1000).toFixed(2)} g CO₂e / cup
-                </div>
-                <div className="text-slate-500 text-xs">After amortization over N_max</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm mt-4">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-slate-500 text-xs uppercase font-medium">
-                  Theoretical Minimum per Cycle
-                </div>
-                <div className="text-xl font-semibold text-slate-900">
-                  {calc.g_cycle.toFixed(2)} g CO₂e / cup
-                </div>
-                <div className="text-slate-500 text-xs">Cleaning + transport only</div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-slate-500 text-xs uppercase font-medium">
-                  SUP Reference
-                </div>
-                <div className="text-xl font-semibold text-slate-900">
-                  {calc.g_single_shot.toFixed(2)} g CO₂e / cup
-                </div>
-                <div className="text-slate-500 text-xs">Single-use capsule</div>
-              </div>
-
-              <div
-                className={`rounded-xl border ${
-                  calc.breakEven
-                    ? "border-emerald-500 bg-emerald-50"
-                    : "border-slate-200 bg-slate-50"
-                } p-3 shadow-sm`}
-              >
-                <div className="text-slate-500 text-xs uppercase font-medium">
-                  Break-Even Point
-                </div>
-                <div
-                  className={`text-xl font-semibold ${
-                    calc.breakEven ? "text-emerald-700" : "text-slate-900"
-                  }`}
-                >
-                  {calc.breakEven ? `N = ${calc.breakEven}` : "Not within range"}
-                </div>
-                <div className="text-slate-500 text-xs">First cycle where MUP ≤ SUP</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Main line chart */}
-          <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
-            <h2 className="font-semibold text-slate-900 mb-4 text-lg">
-              CO₂ per Cup over Reuse Cycles (g)
-            </h2>
-
-            <div className="w-full h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={calc.chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
-                  <XAxis
-                    dataKey="cycle"
-                    label={{
-                      value: "Max technical cycles (N_max)",
-                      position: "insideBottomRight",
-                      offset: -5,
-                      style: { fill: "#475569", fontSize: 12 },
-                    }}
-                    stroke="#475569"
-                  />
-                  <YAxis
-                    label={{
-                      value: "g CO₂e / cup",
-                      angle: -90,
-                      position: "insideLeft",
-                      style: { fill: "#475569", fontSize: 12 },
-                    }}
-                    stroke="#475569"
-                  />
-                  <Tooltip />
-                  <Legend />
-                  <Line type="monotone" dataKey="MUP" stroke="#0ea5e9" strokeWidth={2} dot={false} name="MUP amortized" />
-                  <Line type="monotone" dataKey="SUP" stroke="#ef4444" strokeDasharray="5 5" strokeWidth={2} dot={false} name="SUP reference" />
-                  <Line type="monotone" dataKey="MinCycle" stroke="#6b7280" strokeDasharray="2 2" strokeWidth={2} dot={false} name="MUP minimum" />
-                  {calc.breakEven && (
-                    <ReferenceLine
-                      x={calc.breakEven}
-                      stroke="#10b981"
-                      strokeWidth={3}
-                      strokeDasharray="3 3"
-                      label={{ value: `Break-even N=${calc.breakEven}`, position: "top", fill: "#065f46", fontSize: 12, fontWeight: 600 }}
-                    />
-                  )}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Sensitivity tornado (shown only when enabled) */}
-          {showSensitivity && sensitivity && (
-            <div className="bg-white rounded-2xl shadow p-4 border border-slate-200">
-              <h2 className="font-semibold text-slate-900 mb-2 text-lg">
-                Sensitivity (±10%) — Impact on MUP at N_max (g CO₂e / cup)
-              </h2>
-              <p className="text-xs text-slate-500 mb-3">
-                Bars show change vs. base ({sensitivity.base.toFixed(2)} g). Left = −10%, Right = +10%.
-              </p>
-
-              <div className="w-full h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={sensitivity.rows}
-                    layout="vertical"
-                    margin={{ left: 20, right: 20, top: 10, bottom: 10 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
-                    <XAxis type="number" tickFormatter={(v) => `${v.toFixed(1)} g`} stroke="#475569" />
-                    <YAxis type="category" dataKey="name" width={170} stroke="#475569" />
-                    <Tooltip formatter={(value) => [`${Number(value).toFixed(2)} g`, "Δ vs. base"]} />
-                    <Legend />
-                    <ReferenceLine x={0} stroke="#64748b" />
-                    <Bar dataKey="Decrease" name="-10%" fill="#ef4444" isAnimationActive={false} />
-                    <Bar dataKey="Increase" name="+10%" fill="#10b981" isAnimationActive={false} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-        </section>
+        <p className="text-[11px] text-slate-500 mt-3">
+          Fixed constants: mass 0.00324 kg · primary Al EF 14.77 kg CO₂e/kg · initial logistics 0.00037 kg CO₂e/capsule ·
+          SUP reference 0.00437 kg CO₂e/cup · cleaning+refill 0.001 kg CO₂e/cycle.
+        </p>
       </div>
 
       <footer className="text-[11px] text-slate-500 text-center leading-relaxed">
