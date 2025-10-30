@@ -19,7 +19,7 @@ export default function App() {
   const [KM_ONE_WAY, setKmOneWay] = useState(300);
   const [p_ret, setPRet] = useState(0.95); // slider (0..1)
   const [p_scr, setPScr] = useState(0.02); // slider (0..1)
-  const [E_EoL_mup, setEEoL] = useState(-0.0015);
+  const [E_EoL_mup, setEEoL] = useState(0);
   const [N_max_top, setNMaxTop] = useState(50);
 
   // Toggle for sensitivity (default OFF)
